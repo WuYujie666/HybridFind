@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import pathlib
+import sys
 from typing import Optional
 
 import typer
@@ -12,11 +13,27 @@ from rich.table import Table
 
 from hybridfind.config import SearchConfig
 from hybridfind.core import HybridSearch
+from hybridfind.evaluation import (
+    ExperimentSpec,
+    default_experiments,
+    evaluate_runs,
+    parse_cranfield_directory,
+    write_csv_report,
+    write_json_report,
+)
 
-app = typer.Typer(help="HybridFind — hybrid semantic + keyword search CLI")
+app = typer.Typer(help="HybridFind - hybrid semantic + keyword search CLI")
 console = Console()
 
 INDEX_PATH = pathlib.Path(".hybridfind_index.json")
+
+
+def _configure_utf8_stdio() -> None:
+    """Prefer UTF-8 output on terminals that support stream reconfiguration."""
+    for stream_name in ("stdout", "stderr"):
+        stream = getattr(sys, stream_name, None)
+        if stream is not None and hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8")
 
 
 def _load_engine() -> HybridSearch:
@@ -24,7 +41,7 @@ def _load_engine() -> HybridSearch:
     if not INDEX_PATH.exists():
         console.print("[red]No index found. Run `hybridfind index <dir>` first.[/red]")
         raise typer.Exit(1)
-    data = json.loads(INDEX_PATH.read_text())
+    data = json.loads(INDEX_PATH.read_text(encoding="utf-8"))
     engine = HybridSearch(SearchConfig(**data.get("config", {})))
     engine.add_documents(
         texts=data["texts"],
@@ -52,7 +69,7 @@ def index(
 
     for fpath in sorted(dir_path.rglob("*")):
         if fpath.is_file() and fpath.suffix in exts:
-            content = fpath.read_text(errors="ignore")
+            content = fpath.read_text(encoding="utf-8", errors="ignore")
             if content.strip():
                 texts.append(content)
                 ids.append(str(fpath))
@@ -62,10 +79,14 @@ def index(
         console.print("[yellow]No matching files found.[/yellow]")
         raise typer.Exit(1)
 
-    # Persist raw data so we can reload later
     INDEX_PATH.write_text(
-        json.dumps({"texts": texts, "ids": ids, "metadatas": metadatas, "config": {}})
+        json.dumps(
+            {"texts": texts, "ids": ids, "metadatas": metadatas, "config": {}},
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
     )
+
     console.print(f"[green]Indexed {len(texts)} documents from {directory}[/green]")
 
 
@@ -82,7 +103,7 @@ def search(
     engine = _load_engine()
     engine.config.bm25_weight = bm25_weight
     engine.config.vector_weight = vector_weight
-    engine.config = engine.config  # trigger re-validation
+    engine.config = engine.config
 
     meta_filter = None
     if filter_field and filter_value:
@@ -107,7 +128,119 @@ def search(
     console.print(table)
 
 
+@app.command()
+def evaluate(
+    data_dir: str = typer.Option(..., "--data-dir", help="Directory containing Cranfield files"),
+    dataset: str = typer.Option("cranfield", "--dataset", help="Benchmark dataset loader to use"),
+    eval_k: int = typer.Option(10, "--eval-k", help="Cutoff for Precision/Recall/nDCG metrics"),
+    output_json: Optional[str] = typer.Option(None, "--output-json", help="Optional JSON report path"),
+    output_csv: Optional[str] = typer.Option(None, "--output-csv", help="Optional CSV report path"),
+    weight_pair: Optional[list[str]] = typer.Option(
+        None,
+        "--weight-pair",
+        help="Additional experiment as 'name:bm25,vector' or 'bm25,vector'",
+    ),
+) -> None:
+    """Run offline retrieval evaluation on a benchmark dataset."""
+    if dataset.lower() != "cranfield":
+        console.print(f"[red]Unsupported dataset: {dataset}. Only 'cranfield' is currently available.[/red]")
+        raise typer.Exit(1)
+
+    benchmark_dir = pathlib.Path(data_dir)
+    if not benchmark_dir.is_dir():
+        console.print(f"[red]Data directory not found: {data_dir}[/red]")
+        raise typer.Exit(1)
+
+    try:
+        texts, ids, queries, qrels = parse_cranfield_directory(benchmark_dir)
+    except FileNotFoundError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1) from exc
+
+    experiments = default_experiments() + _parse_weight_pairs(weight_pair or [])
+    results = evaluate_runs(texts, ids, queries, qrels, experiments, eval_k=eval_k)
+
+    console.print(
+        f"[green]Loaded {len(ids)} documents, {len(queries)} queries, and {len(qrels)} judged queries from {benchmark_dir}[/green]"
+    )
+    _print_evaluation_table(results, eval_k)
+
+    if output_json:
+        json_path = pathlib.Path(output_json)
+        write_json_report(results, json_path)
+        console.print(f"[green]Wrote JSON report to {json_path}[/green]")
+
+    if output_csv:
+        csv_path = pathlib.Path(output_csv)
+        write_csv_report(results, csv_path)
+        console.print(f"[green]Wrote CSV report to {csv_path}[/green]")
+
+
+def _parse_weight_pairs(weight_pairs: list[str]) -> list[ExperimentSpec]:
+    """Parse custom experiment specifications from the CLI."""
+    experiments: list[ExperimentSpec] = []
+    for index, raw_value in enumerate(weight_pairs, start=1):
+        name: str
+        payload = raw_value
+        if ":" in raw_value:
+            name, payload = raw_value.split(":", maxsplit=1)
+        else:
+            name = f"custom_{index}"
+
+        parts = [part.strip() for part in payload.split(",")]
+        if len(parts) != 2:
+            raise typer.BadParameter(
+                "Weight pairs must look like 'name:0.7,0.3' or '0.7,0.3'.",
+                param_hint="--weight-pair",
+            )
+        try:
+            bm25_weight = float(parts[0])
+            vector_weight = float(parts[1])
+        except ValueError as exc:
+            raise typer.BadParameter(
+                "Weight pairs must use numeric values.",
+                param_hint="--weight-pair",
+            ) from exc
+
+        experiments.append(
+            ExperimentSpec(
+                name=name.strip() or f"custom_{index}",
+                bm25_weight=bm25_weight,
+                vector_weight=vector_weight,
+            )
+        )
+    return experiments
+
+
+def _print_evaluation_table(results: list[dict[str, object]], eval_k: int) -> None:
+    """Render an experiment summary table to the terminal."""
+    table = Table(title="Offline Evaluation Summary")
+    table.add_column("Experiment", style="bold cyan")
+    table.add_column("BM25", style="green", justify="right")
+    table.add_column("TF-IDF", style="green", justify="right")
+    table.add_column(f"P@{eval_k}", style="magenta", justify="right")
+    table.add_column(f"R@{eval_k}", style="magenta", justify="right")
+    table.add_column("MAP", style="yellow", justify="right")
+    table.add_column("MRR", style="yellow", justify="right")
+    table.add_column(f"nDCG@{eval_k}", style="yellow", justify="right")
+
+    for row in results:
+        table.add_row(
+            str(row["experiment"]),
+            f"{float(row['bm25_weight']):.2f}",
+            f"{float(row['vector_weight']):.2f}",
+            f"{float(row[f'precision@{eval_k}']):.4f}",
+            f"{float(row[f'recall@{eval_k}']):.4f}",
+            f"{float(row['map']):.4f}",
+            f"{float(row['mrr']):.4f}",
+            f"{float(row[f'ndcg@{eval_k}']):.4f}",
+        )
+
+    console.print(table)
+
+
 def main() -> None:
+    _configure_utf8_stdio()
     app()
 
 

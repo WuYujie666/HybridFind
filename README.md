@@ -84,26 +84,26 @@ results = engine.search("data", metadata_filter={"category": "ml"})
 ### CLI
 
 ```bash
-# Index a directory of text files
+# Index a directory of text files 把 docs/ 目录下面的 .txt 和 .md 文件都读进来，建立搜索索引。
 hybridfind index docs/ --extensions ".txt,.md"
 
-# Search
+# Search 执行搜索
 hybridfind search "hybrid search algorithms" --top-k 5
 
-# Adjust weights
+# Adjust weights 执行搜索，但这次手动调整两种检索方法的权重
 hybridfind search "query" --bm25-weight 0.7 --vector-weight 0.3
 ```
 
 ## Configuration
 
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `bm25_weight` | 0.5 | Weight for BM25 keyword results |
-| `vector_weight` | 0.5 | Weight for TF-IDF vector results |
-| `rrf_k` | 60 | RRF smoothing constant |
-| `bm25_k1` | 1.5 | BM25 term-frequency saturation |
-| `bm25_b` | 0.75 | BM25 length normalization |
-| `top_k` | 10 | Number of results to return |
+| Parameter       | Default | Description                      |
+| --------------- | ------- | -------------------------------- |
+| `bm25_weight`   | 0.5     | Weight for BM25 keyword results  |
+| `vector_weight` | 0.5     | Weight for TF-IDF vector results |
+| `rrf_k`         | 60      | RRF smoothing constant           |
+| `bm25_k1`       | 1.5     | BM25 term-frequency saturation   |
+| `bm25_b`        | 0.75    | BM25 length normalization        |
+| `top_k`         | 10      | Number of results to return      |
 
 ## Development
 

@@ -1,4 +1,4 @@
-"""Tests for Cranfield-style evaluation support."""
+"""Tests for offline evaluation support."""
 
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ from hybridfind.evaluation import (
     default_experiments,
     evaluate_runs,
     ndcg_at_k,
+    parse_beir_directory,
     parse_cranfield_directory,
     precision_at_k,
     recall_at_k,
@@ -62,11 +63,34 @@ precision recall metrics
 astronomy telescope
 """
 
+BEIR_CORPUS = """{"_id": "d1", "title": "COVID vaccines", "text": "Vaccines reduce severe outcomes."}
+{"_id": "d2", "title": "Climate paper", "text": "Global warming affects sea levels."}
+{"_id": "d3", "title": "Space article", "text": "Galaxies and telescopes are studied in astronomy."}
+"""
+
+BEIR_QUERIES = """{"_id": "q1", "text": "covid vaccine outcomes"}
+{"_id": "q2", "text": "sea level climate"}
+"""
+
+BEIR_QRELS = """query-id\tcorpus-id\tscore
+q1\td1\t1
+q2\td2\t2
+q2\td3\t0
+"""
+
 
 def _write_cranfield_fixture(tmp_path, queries_text: str = CRAN_QUERIES) -> None:
     (tmp_path / "cran.all.1400").write_text(CRAN_DOCS, encoding="utf-8")
     (tmp_path / "cran.qry").write_text(queries_text, encoding="utf-8")
     (tmp_path / "cranqrel").write_text(CRAN_QRELS, encoding="utf-8")
+
+
+def _write_beir_fixture(tmp_path) -> None:
+    (tmp_path / "corpus.jsonl").write_text(BEIR_CORPUS, encoding="utf-8")
+    (tmp_path / "queries.jsonl").write_text(BEIR_QUERIES, encoding="utf-8")
+    qrels_dir = tmp_path / "qrels"
+    qrels_dir.mkdir()
+    (qrels_dir / "test.tsv").write_text(BEIR_QRELS, encoding="utf-8")
 
 
 class TestEvaluationMetrics:
@@ -100,6 +124,29 @@ class TestCranfieldParsing:
 
         assert [query.query_id for query in queries] == ["1", "2", "3"]
         assert qrels == {"1": {"1"}, "2": {"2"}}
+
+
+class TestBeirParsing:
+    def test_parse_beir_directory(self, tmp_path) -> None:
+        _write_beir_fixture(tmp_path)
+
+        texts, ids, queries, qrels = parse_beir_directory(tmp_path)
+
+        assert ids == ["d1", "d2", "d3"]
+        assert texts[0].startswith("COVID vaccines")
+        assert [query.query_id for query in queries] == ["q1", "q2"]
+        assert qrels == {"q1": {"d1"}, "q2": {"d2"}}
+
+    def test_parse_beir_directory_filters_queries_to_selected_split(self, tmp_path) -> None:
+        _write_beir_fixture(tmp_path)
+        queries_path = tmp_path / "queries.jsonl"
+        extra_query = '{"_id": "unused", "text": "this query is not in qrels"}\n'
+        queries_path.write_text(BEIR_QUERIES + extra_query, encoding="utf-8")
+
+        _, _, queries, qrels = parse_beir_directory(tmp_path)
+
+        assert [query.query_id for query in queries] == ["q1", "q2"]
+        assert "unused" not in qrels
 
 
 class TestEvaluationRuns:

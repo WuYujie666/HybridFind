@@ -17,6 +17,7 @@ from hybridfind.evaluation import (
     ExperimentSpec,
     default_experiments,
     evaluate_runs,
+    parse_beir_directory,
     parse_cranfield_directory,
     write_csv_report,
     write_json_report,
@@ -130,7 +131,7 @@ def search(
 
 @app.command()
 def evaluate(
-    data_dir: str = typer.Option(..., "--data-dir", help="Directory containing Cranfield files"),
+    data_dir: str = typer.Option(..., "--data-dir", help="Directory containing benchmark files"),
     dataset: str = typer.Option("cranfield", "--dataset", help="Benchmark dataset loader to use"),
     eval_k: int = typer.Option(10, "--eval-k", help="Cutoff for Precision/Recall/nDCG metrics"),
     output_json: Optional[str] = typer.Option(None, "--output-json", help="Optional JSON report path"),
@@ -140,19 +141,29 @@ def evaluate(
         "--weight-pair",
         help="Additional experiment as 'name:bm25,vector' or 'bm25,vector'",
     ),
+    beir_split: Optional[str] = typer.Option(
+        None,
+        "--beir-split",
+        help="Optional BEIR qrels split to load, such as test or dev",
+    ),
 ) -> None:
     """Run offline retrieval evaluation on a benchmark dataset."""
-    if dataset.lower() != "cranfield":
-        console.print(f"[red]Unsupported dataset: {dataset}. Only 'cranfield' is currently available.[/red]")
-        raise typer.Exit(1)
-
     benchmark_dir = pathlib.Path(data_dir)
     if not benchmark_dir.is_dir():
         console.print(f"[red]Data directory not found: {data_dir}[/red]")
         raise typer.Exit(1)
 
+    dataset_name = dataset.lower()
     try:
-        texts, ids, queries, qrels = parse_cranfield_directory(benchmark_dir)
+        if dataset_name == "cranfield":
+            texts, ids, queries, qrels = parse_cranfield_directory(benchmark_dir)
+        elif dataset_name in {"scifact", "beir", "beir-scifact", "beir_scifact"}:
+            texts, ids, queries, qrels = parse_beir_directory(benchmark_dir, split=beir_split)
+        else:
+            console.print(
+                f"[red]Unsupported dataset: {dataset}. Use 'cranfield' or a BEIR-style dataset such as 'scifact'.[/red]"
+            )
+            raise typer.Exit(1)
     except FileNotFoundError as exc:
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(1) from exc

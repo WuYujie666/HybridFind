@@ -1,4 +1,4 @@
-"""Offline evaluation utilities for benchmark datasets such as Cranfield."""
+"""Offline evaluation utilities for benchmark datasets such as Cranfield and BEIR."""
 
 from __future__ import annotations
 
@@ -125,6 +125,40 @@ def parse_cranfield_directory(
     return texts, ids, queries, qrels
 
 
+def parse_beir_directory(
+    data_dir: pathlib.Path,
+    split: str | None = None,
+) -> tuple[list[str], list[str], list[EvaluationQuery], dict[str, set[str]]]:
+    """Load a BEIR-style dataset directory such as SciFact."""
+    corpus_path = _resolve_candidate(data_dir, "corpus.jsonl")
+    query_path = _resolve_candidate(data_dir, "queries.jsonl")
+    qrel_path = _resolve_beir_qrels_path(data_dir, split)
+
+    texts: list[str] = []
+    ids: list[str] = []
+    for record in _read_jsonl(corpus_path):
+        doc_id = _normalize_identifier(str(record.get("_id", "")))
+        title = str(record.get("title", "")).strip()
+        text = str(record.get("text", "")).strip()
+        combined_text = " ".join(part for part in (title, text) if part).strip()
+        if doc_id and combined_text:
+            ids.append(doc_id)
+            texts.append(combined_text)
+
+    qrels = _parse_beir_qrels(qrel_path)
+    queries = [
+        EvaluationQuery(
+            query_id=_normalize_identifier(str(record.get("_id", ""))),
+            text=str(record.get("text", "")).strip(),
+        )
+        for record in _read_jsonl(query_path)
+        if str(record.get("_id", "")).strip()
+        and str(record.get("text", "")).strip()
+        and _normalize_identifier(str(record.get("_id", ""))) in qrels
+    ]
+    return texts, ids, queries, qrels
+
+
 def evaluate_runs(
     texts: list[str],
     ids: list[str],
@@ -222,6 +256,34 @@ def _resolve_candidate(data_dir: pathlib.Path, *candidates: str) -> pathlib.Path
     raise FileNotFoundError(f"Could not find any of the expected files in {data_dir}: {expected}")
 
 
+def _resolve_beir_qrels_path(data_dir: pathlib.Path, split: str | None) -> pathlib.Path:
+    """Resolve the qrels TSV for a BEIR dataset."""
+    qrels_dir = data_dir / "qrels"
+    if not qrels_dir.is_dir():
+        raise FileNotFoundError(f"Could not find BEIR qrels directory: {qrels_dir}")
+
+    candidates: list[pathlib.Path] = []
+    if split:
+        candidates.append(qrels_dir / f"{split}.tsv")
+    candidates.extend(qrels_dir / name for name in ("test.tsv", "dev.tsv", "train.tsv"))
+
+    for path in candidates:
+        if path.exists():
+            return path
+    available = ", ".join(sorted(path.name for path in qrels_dir.glob("*.tsv"))) or "none"
+    raise FileNotFoundError(f"Could not find a BEIR qrels split in {qrels_dir}. Available: {available}")
+
+
+def _read_jsonl(path: pathlib.Path) -> list[dict[str, object]]:
+    """Read newline-delimited JSON records from disk."""
+    records: list[dict[str, object]] = []
+    for line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
+        stripped = line.strip()
+        if stripped:
+            records.append(json.loads(stripped))
+    return records
+
+
 def _parse_cran_records(raw_text: str) -> list[dict[str, str]]:
     """Parse `.I`/field-marker records used by Cranfield docs and queries."""
     records: list[dict[str, str]] = []
@@ -270,6 +332,20 @@ def _parse_qrels(raw_text: str) -> dict[str, set[str]]:
 
         if _is_relevant(relevance):
             qrels.setdefault(_normalize_identifier(query_id), set()).add(_normalize_identifier(doc_id))
+    return qrels
+
+
+def _parse_beir_qrels(path: pathlib.Path) -> dict[str, set[str]]:
+    """Parse BEIR qrels TSV into query -> relevant doc ids."""
+    qrels: dict[str, set[str]] = {}
+    with path.open("r", encoding="utf-8", newline="") as handle:
+        reader = csv.DictReader(handle, delimiter="\t")
+        for row in reader:
+            query_id = _normalize_identifier(str(row.get("query-id", "")))
+            doc_id = _normalize_identifier(str(row.get("corpus-id", "")))
+            score = str(row.get("score", "0"))
+            if query_id and doc_id and _is_relevant(score):
+                qrels.setdefault(query_id, set()).add(doc_id)
     return qrels
 
 

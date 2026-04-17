@@ -1,11 +1,10 @@
-"""Text preprocessing, tokenization, and TF-IDF utilities."""
+﻿"""Text preprocessing and similarity utilities."""
 
 from __future__ import annotations
 
 import math
 import re
 import string
-from collections import Counter
 
 # Common English stop words
 STOP_WORDS: set[str] = {
@@ -33,39 +32,6 @@ def tokenize(text: str, remove_stopwords: bool = True) -> list[str]:
     return tokens
 
 
-def compute_tf(tokens: list[str]) -> dict[str, float]:
-    """Compute raw term-frequency for a token list."""
-    counts = Counter(tokens)
-    total = len(tokens)
-    if total == 0:
-        return {}
-    return {term: count / total for term, count in counts.items()}
-
-
-def compute_idf(corpus_tokens: list[list[str]]) -> dict[str, float]:
-    """Compute inverse document frequency across a corpus.
-
-    Uses the smoothed IDF formula: log((N + 1) / (df + 1)) + 1
-    """
-    n = len(corpus_tokens)
-    df: dict[str, int] = {}
-    for doc_tokens in corpus_tokens:
-        seen: set[str] = set()
-        for token in doc_tokens:
-            if token not in seen:
-                df[token] = df.get(token, 0) + 1
-                seen.add(token)
-    return {term: math.log((n + 1) / (freq + 1)) + 1 for term, freq in df.items()}
-
-
-def tfidf_vector(
-    tokens: list[str], idf: dict[str, float]
-) -> dict[str, float]:
-    """Build a TF-IDF vector (sparse dict) for a single document."""
-    tf = compute_tf(tokens)
-    return {term: tf_val * idf.get(term, 1.0) for term, tf_val in tf.items()}
-
-
 def cosine_similarity(vec_a: dict[str, float], vec_b: dict[str, float]) -> float:
     """Compute cosine similarity between two sparse vectors."""
     if not vec_a or not vec_b:
@@ -74,6 +40,19 @@ def cosine_similarity(vec_a: dict[str, float], vec_b: dict[str, float]) -> float
     dot = sum(vec_a[k] * vec_b[k] for k in common_keys)
     mag_a = math.sqrt(sum(v * v for v in vec_a.values()))
     mag_b = math.sqrt(sum(v * v for v in vec_b.values()))
+    if mag_a == 0 or mag_b == 0:
+        return 0.0
+    return dot / (mag_a * mag_b)
+
+
+def dense_cosine_similarity(vec_a: list[float], vec_b: list[float]) -> float:
+    """Compute cosine similarity between two dense vectors."""
+    if not vec_a or not vec_b or len(vec_a) != len(vec_b):
+        return 0.0
+
+    dot = sum(a * b for a, b in zip(vec_a, vec_b))
+    mag_a = math.sqrt(sum(v * v for v in vec_a))
+    mag_b = math.sqrt(sum(v * v for v in vec_b))
     if mag_a == 0 or mag_b == 0:
         return 0.0
     return dot / (mag_a * mag_b)

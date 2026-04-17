@@ -5,12 +5,12 @@ build-backend = "hatchling.build"
 [project]
 name = "hybridfind"
 version = "0.1.0"
-description = "Hybrid semantic + keyword search — BM25 and vector similarity with Reciprocal Rank Fusion"
+description = "Hybrid semantic + keyword search - BM25 and dense retrieval with Reciprocal Rank Fusion"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.10"
 authors = [{ name = "Officethree Technologies" }]
-keywords = ["search", "bm25", "tfidf", "hybrid-search", "rag", "information-retrieval"]
+keywords = ["search", "bm25", "dense-retrieval", "embeddings", "hybrid-search", "rag", "information-retrieval"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
@@ -23,6 +23,7 @@ dependencies = [
     "pydantic>=2.0",
     "typer>=0.9",
     "rich>=13.0",
+    "sentence-transformers>=3.0",
 ]
 
 [project.scripts]

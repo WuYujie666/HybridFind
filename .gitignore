@@ -13,7 +13,13 @@ env/
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/
-.hybridfind_index.json
 *.so
 *.dylib
 .DS_Store
+
+# Runtime cache artifacts
+artifacts/cache/
+
+# Keep experiment reports and notes tracked
+!artifacts/reports/
+!docs/experiments/

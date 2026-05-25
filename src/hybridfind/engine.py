@@ -8,6 +8,8 @@ from typing import Any
 from hybridfind.config import SearchConfig
 from hybridfind.embedding import TextEncoder
 from hybridfind.fusion import reciprocal_rank_fusion
+from hybridfind.query_expansion import PseudoRelevanceFeedback
+from hybridfind.reranker import CrossEncoderReranker
 from hybridfind.retrievers import BM25Searcher, DenseSearcher
 from hybridfind.schemas import Document, SearchResult
 from hybridfind.utils import tokenize
@@ -27,6 +29,11 @@ class HybridSearch:
         self.documents: list[Document] = []
         self._bm25_ready = False
         self._dense_ready = False
+        self._reranker: CrossEncoderReranker | None = (
+            CrossEncoderReranker(self.config.reranker_model_name)
+            if self.config.reranker_model_name
+            else None
+        )
 
     def add_documents(
         self,
@@ -38,7 +45,7 @@ class HybridSearch:
         for i, text in enumerate(texts):
             doc_id = ids[i] if ids else str(i)
             meta = metadatas[i] if metadatas else {}
-            tokens = tokenize(text)
+            tokens = tokenize(text, remove_stopwords=False)
             self.documents.append(Document(doc_id=doc_id, text=text, metadata=meta, tokens=tokens))
         self._bm25_ready = False
         self._dense_ready = False
@@ -87,7 +94,14 @@ class HybridSearch:
         k = top_k or self.config.top_k
         if not query.strip():
             return []
-        query_tokens = tokenize(query)
+
+        # PRF: expand the query with terms from top BM25 results before full retrieval
+        effective_query = query
+        if self.config.enable_prf and self._bm25_ready:
+            prf = PseudoRelevanceFeedback(self.config.prf_top_docs, self.config.prf_top_terms)
+            effective_query = prf.expand(query, self.bm25, self.documents)
+
+        query_tokens = tokenize(effective_query, remove_stopwords=False)
 
         candidate_indices: set[int] | None = None
         if metadata_filter:
@@ -108,7 +122,7 @@ class HybridSearch:
 
         if self.config.dense_weight > 0:
             self.ensure_dense_ready()
-            dense_results = self.dense.search(query, top_k=len(self.documents))
+            dense_results = self.dense.search(effective_query, top_k=len(self.documents))
 
         if candidate_indices is not None:
             bm25_results = [(idx, sc) for idx, sc in bm25_results if idx in candidate_indices]
@@ -121,12 +135,19 @@ class HybridSearch:
             k=self.config.rrf_k,
         )
 
-        return [
+        # Build candidate list for reranker (or final result list)
+        candidate_k = self.config.reranker_candidate_k if self._reranker else k
+        candidates = [
             SearchResult(
                 doc_id=self.documents[doc_idx].doc_id,
                 score=score,
                 text=self.documents[doc_idx].text,
                 metadata=self.documents[doc_idx].metadata,
             )
-            for doc_idx, score in fused[:k]
+            for doc_idx, score in fused[:candidate_k]
         ]
+
+        if self._reranker:
+            return self._reranker.rerank(query, candidates, top_k=k)
+
+        return candidates[:k]

@@ -26,6 +26,9 @@ dependencies = [
     "sentence-transformers>=3.0",
 ]
 
+[project.optional-dependencies]
+faiss = ["faiss-cpu>=1.7"]
+
 [project.scripts]
 hybridfind = "hybridfind.__main__:main"
 

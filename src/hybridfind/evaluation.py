@@ -6,7 +6,8 @@ import csv
 import json
 import math
 import pathlib
-from dataclasses import dataclass
+import time
+from dataclasses import dataclass, field
 from statistics import mean
 
 from hybridfind.config import SearchConfig
@@ -24,6 +25,7 @@ class ExperimentSpec:
     name: str
     bm25_weight: float
     dense_weight: float
+    disable_faiss: bool = False  # bypass FAISS and use brute-force cosine (for benchmarking)
 
 
 def precision_at_k(ranked_ids: list[str], relevant_ids: set[str], k: int) -> float:
@@ -112,7 +114,9 @@ def evaluate_runs(
     eval_k: int = 10,
 ) -> list[dict[str, object]]:
     results: list[dict[str, object]] = []
-    base_config = SearchConfig(top_k=max(len(ids), eval_k))
+    base_config = SearchConfig(
+        top_k=max(len(ids), eval_k),
+    )
     engine = HybridSearch(config=base_config)
     engine.add_documents(texts=texts, ids=ids)
     if any(experiment.dense_weight > 0 for experiment in experiments):
@@ -126,13 +130,21 @@ def evaluate_runs(
         engine.config.dense_weight = experiment.dense_weight
         engine.config.top_k = max(len(ids), eval_k)
 
+        # Temporarily disable FAISS index for brute-force comparison experiments
+        saved_faiss = engine.dense._faiss_index
+        if experiment.disable_faiss:
+            engine.dense._faiss_index = None
+
         query_rows: list[dict[str, object]] = []
         total_queries = len(queries)
+        experiment_start = time.perf_counter()
         for idx, query in enumerate(queries, start=1):
             if idx == 1 or idx % 50 == 0 or idx == total_queries:
                 print(f'[evaluate] {experiment.name}: query {idx}/{total_queries}', flush=True)
             relevant_ids = qrels.get(query.query_id, set())
+            t0 = time.perf_counter()
             ranked_ids = [result.doc_id for result in engine.search(query.text, top_k=len(ids))]
+            query_time_ms = (time.perf_counter() - t0) * 1000
             query_rows.append({
                 'query_id': query.query_id,
                 'precision_at_k': precision_at_k(ranked_ids, relevant_ids, eval_k),
@@ -143,7 +155,12 @@ def evaluate_runs(
                 'relevant_count': len(relevant_ids),
                 'retrieved_count': len(ranked_ids),
                 'top_results': ranked_ids[:eval_k],
+                'query_time_ms': query_time_ms,
             })
+        total_time_s = time.perf_counter() - experiment_start
+
+        if experiment.disable_faiss:
+            engine.dense._faiss_index = saved_faiss
 
         results.append({
             'experiment': experiment.name,
@@ -155,15 +172,49 @@ def evaluate_runs(
             'map': _mean_metric(query_rows, 'average_precision'),
             'mrr': _mean_metric(query_rows, 'reciprocal_rank'),
             f'ndcg@{eval_k}': _mean_metric(query_rows, 'ndcg_at_k'),
+            'avg_query_ms': _mean_metric(query_rows, 'query_time_ms'),
+            'total_time_s': total_time_s,
             'per_query': query_rows,
         })
+    return results
+
+
+def _isolated_worker(
+    data_dir_str: str,
+    split: str | None,
+    experiment: ExperimentSpec,
+    eval_k: int,
+) -> dict[str, object]:
+    """Runs one experiment in a freshly spawned subprocess (cold CPU cache)."""
+    texts, ids, queries, qrels = parse_beir_directory(pathlib.Path(data_dir_str), split=split)
+    return evaluate_runs(texts, ids, queries, qrels, [experiment], eval_k=eval_k)[0]
+
+
+def evaluate_runs_isolated(
+    data_dir: pathlib.Path,
+    split: str | None,
+    experiments: list[ExperimentSpec],
+    eval_k: int = 10,
+) -> list[dict[str, object]]:
+    """Run each experiment in a separate subprocess so CPU cache is cold and equal for all."""
+    import multiprocessing
+    ctx = multiprocessing.get_context('spawn')
+    results: list[dict[str, object]] = []
+    for experiment in experiments:
+        print(f'[evaluate] Spawning isolated process for {experiment.name}...', flush=True)
+        with ctx.Pool(processes=1) as pool:
+            result = pool.apply(_isolated_worker, (str(data_dir), split, experiment, eval_k))
+        avg_ms = result.get('avg_query_ms', 0)
+        print(f'[evaluate] {experiment.name} done: {avg_ms:.1f} ms/q', flush=True)
+        results.append(result)
     return results
 
 
 def default_experiments() -> list[ExperimentSpec]:
     return [
         ExperimentSpec(name='bm25_only', bm25_weight=1.0, dense_weight=0.0),
-        ExperimentSpec(name='dense_only', bm25_weight=0.0, dense_weight=1.0),
+        ExperimentSpec(name='dense_faiss', bm25_weight=0.0, dense_weight=1.0),
+        ExperimentSpec(name='dense_brute', bm25_weight=0.0, dense_weight=1.0, disable_faiss=True),
         ExperimentSpec(name='hybrid_rrf', bm25_weight=0.5, dense_weight=0.5),
     ]
 

@@ -47,7 +47,38 @@ Observations:
 - A small BM25 contribution helped the dense retriever and slightly beat `dense_only`.
 - Increasing BM25 beyond that point reduced performance, which suggests dense retrieval is the dominant signal on SciFact.
 
-## 4. Practical Conclusion
+## 4. FAISS Integration and Latency Benchmark (2026-05-04)
+
+### Changes implemented
+- `src/hybridfind/retrievers/dense.py`: added `IndexFlatIP` FAISS index; brute-force cosine loop kept as automatic fallback when `faiss-cpu` is not installed.
+- `src/hybridfind/reranker.py` (new): `CrossEncoderReranker` using `cross-encoder/ms-marco-MiniLM-L-6-v2`; lazy-loaded on first call.
+- `src/hybridfind/query_expansion.py` (new): `PseudoRelevanceFeedback`; disabled by default (`enable_prf=False` in config).
+- `src/hybridfind/config.py`: added `reranker_model_name`, `reranker_candidate_k`, `enable_prf`, `prf_top_docs`, `prf_top_terms` fields.
+
+### Status
+| Feature | Status |
+|---|---|
+| FAISS vector index | Done, verified |
+| Cross-Encoder Reranking | Implemented, not yet benchmarked on SciFact (too slow on CPU: ~4s/query × 300 queries per experiment) |
+| PRF Query Expansion | Implemented, not yet benchmarked |
+
+### Latency comparison: FAISS vs brute-force
+
+Run command: `python -m hybridfind evaluate --data-dir data/scifact/scifact --isolated`
+(`--isolated` spawns a fresh subprocess per experiment to ensure a cold CPU cache.)
+
+| Experiment | nDCG@10 | Avg ms/q | Total s |
+|---|---:|---:|---:|
+| bm25_only | 0.6479 | 16.3 | 4.9 |
+| dense_faiss | 0.7200 | 123.5 | 37.1 |
+| dense_brute | 0.7200 | 351.7 | 105.6 |
+| hybrid_rrf | 0.7075 | 112.0 | 33.7 |
+
+**FAISS speedup: 351.7 / 123.5 = 2.85x** over brute-force, with identical retrieval quality (same nDCG@10).
+
+Note: `hybrid_rrf` appears slightly faster than `dense_faiss` in this run; code tracing confirms hybrid does strictly more work (BM25 + FAISS + larger RRF merge), so the ~9% gap is within OS scheduling noise and should not be interpreted as a real advantage.
+
+## 5. Practical Conclusion
 
 - Dense retrieval is a successful replacement for TF-IDF in this project.
 - On SciFact, the best tested setting is currently:

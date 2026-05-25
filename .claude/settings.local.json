@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(Get-ChildItem -Path \"c:\\\\code\\\\IR1\\\\HybridFind\" -Force)",
+      "Bash(Select-Object Name, PSIsContainer)",
+      "Bash(Format-Table -AutoSize)",
+      "PowerShell(Get-ChildItem -Path \"c:\\\\code\\\\IR1\\\\HybridFind\" -Force | Select-Object Name, @{Name=\"Type\";Expression={if\\($_.PSIsContainer\\){\"Directory\"}else{\"File\"}}} | Format-Table -AutoSize)",
+      "PowerShell(Get-ChildItem -Path \"c:\\\\code\\\\IR1\\\\HybridFind\" -Recurse -Directory -Force | Where-Object { $_.Name -notmatch '^\\\\.' -and $_.Name -ne '__pycache__' -and $_.Name -ne '.pytest_cache' } | Select-Object @{Name=\"Path\";Expression={$_.FullName.Replace\\('c:\\\\code\\\\IR1\\\\HybridFind\\\\',''\\)}})",
+      "Bash(python -m pytest tests/ -v)"
+    ]
+  }
+}

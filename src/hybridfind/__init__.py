@@ -15,6 +15,8 @@ from hybridfind.evaluation import (
     recall_at_k,
     reciprocal_rank,
 )
+from hybridfind.query_expansion import PseudoRelevanceFeedback
+from hybridfind.reranker import CrossEncoderReranker
 from hybridfind.schemas import Document, SearchResult
 
 __all__ = [
@@ -34,4 +36,6 @@ __all__ = [
     'ndcg_at_k',
     'default_experiments',
     'evaluate_runs',
+    'CrossEncoderReranker',
+    'PseudoRelevanceFeedback',
 ]

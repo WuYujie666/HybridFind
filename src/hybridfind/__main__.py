@@ -17,6 +17,7 @@ from hybridfind.evaluation import (
     ExperimentSpec,
     default_experiments,
     evaluate_runs,
+    evaluate_runs_isolated,
     parse_beir_directory,
     write_csv_report,
     write_json_report,
@@ -140,6 +141,9 @@ def evaluate(
     output_csv: Optional[str] = typer.Option(None, '--output-csv', help='Optional CSV report path'),
     weight_pair: Optional[list[str]] = typer.Option(None, '--weight-pair', help="Additional experiment as 'name:bm25,dense' or 'bm25,dense'"),
     beir_split: Optional[str] = typer.Option(None, '--beir-split', help='Optional BEIR qrels split to load'),
+    isolated: bool = typer.Option(False, '--isolated', help='Run each experiment in a fresh subprocess for fair timing comparison'),
+    only: Optional[list[str]] = typer.Option(None, '--only', help='Run only these experiment names, e.g. --only bm25_only --only hybrid_rrf'),
+    max_queries: Optional[int] = typer.Option(None, '--max-queries', help='Limit evaluation to the first N queries (for quick debugging)'),
 ) -> None:
     benchmark_dir = pathlib.Path(data_dir)
     if not benchmark_dir.is_dir():
@@ -159,7 +163,20 @@ def evaluate(
 
     console.print(f'[cyan]Loaded {len(ids)} documents and {len(queries)} queries.[/cyan]')
     experiments = default_experiments() + _parse_weight_pairs(weight_pair or [])
-    results = evaluate_runs(texts, ids, queries, qrels, experiments, eval_k=eval_k)
+    if only:
+        known = {e.name for e in experiments}
+        unknown = set(only) - known
+        if unknown:
+            console.print(f"[red]Unknown experiments: {', '.join(sorted(unknown))}. Available: {', '.join(sorted(known))}[/red]")
+            raise typer.Exit(1)
+        experiments = [e for e in experiments if e.name in set(only)]
+    if max_queries is not None:
+        queries = queries[:max_queries]
+        console.print(f'[yellow]Limiting to {len(queries)} queries (--max-queries {max_queries})[/yellow]')
+    if isolated:
+        results = evaluate_runs_isolated(benchmark_dir, beir_split, experiments, eval_k=eval_k)
+    else:
+        results = evaluate_runs(texts, ids, queries, qrels, experiments, eval_k=eval_k)
 
     _print_evaluation_table(results, eval_k)
     if output_json:
@@ -204,6 +221,8 @@ def _print_evaluation_table(results: list[dict[str, object]], eval_k: int) -> No
     table.add_column('MAP', style='yellow', justify='right')
     table.add_column('MRR', style='yellow', justify='right')
     table.add_column(f'nDCG@{eval_k}', style='yellow', justify='right')
+    table.add_column('Avg ms/q', style='cyan', justify='right')
+    table.add_column('Total s', style='cyan', justify='right')
     for row in results:
         table.add_row(
             str(row['experiment']),
@@ -214,6 +233,8 @@ def _print_evaluation_table(results: list[dict[str, object]], eval_k: int) -> No
             f"{float(row['map']):.4f}",
             f"{float(row['mrr']):.4f}",
             f"{float(row[f'ndcg@{eval_k}']):.4f}",
+            f"{float(row.get('avg_query_ms', 0)):.1f}",
+            f"{float(row.get('total_time_s', 0)):.1f}",
         )
     console.print(table)
 

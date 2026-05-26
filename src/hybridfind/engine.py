@@ -20,6 +20,7 @@ class HybridSearch:
 
     def __init__(self, config: SearchConfig | None = None, dense_encoder: TextEncoder | None = None) -> None:
         self.config = config or SearchConfig()
+        self.config.apply_hf_env()
         self.bm25 = BM25Searcher(k1=self.config.bm25_k1, b=self.config.bm25_b)
         self.dense = DenseSearcher(
             model_name=self.config.dense_model_name,
@@ -45,7 +46,7 @@ class HybridSearch:
         for i, text in enumerate(texts):
             doc_id = ids[i] if ids else str(i)
             meta = metadatas[i] if metadatas else {}
-            tokens = tokenize(text, remove_stopwords=False)
+            tokens = tokenize(text)
             self.documents.append(Document(doc_id=doc_id, text=text, metadata=meta, tokens=tokens))
         self._bm25_ready = False
         self._dense_ready = False
@@ -101,7 +102,7 @@ class HybridSearch:
             prf = PseudoRelevanceFeedback(self.config.prf_top_docs, self.config.prf_top_terms)
             effective_query = prf.expand(query, self.bm25, self.documents)
 
-        query_tokens = tokenize(effective_query, remove_stopwords=False)
+        query_tokens = tokenize(effective_query)
 
         candidate_indices: set[int] | None = None
         if metadata_filter:

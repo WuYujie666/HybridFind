@@ -25,6 +25,18 @@ class SearchConfig(BaseModel):
     enable_prf: bool = Field(default=False, description="Enable Pseudo Relevance Feedback query expansion for BM25")
     prf_top_docs: int = Field(default=3, gt=0, description="Number of top documents used for PRF expansion")
     prf_top_terms: int = Field(default=5, gt=0, description="Number of expansion terms added by PRF")
+    hf_mirror: str | None = Field(default=None, description="HuggingFace mirror endpoint (e.g. https://hf-mirror.com). Set HF_ENDPOINT env var if not specified here.")
+
+    def apply_hf_env(self) -> None:
+        """Apply HuggingFace environment variables from config.
+
+        If ``hf_mirror`` is set, it is mapped to the ``HF_ENDPOINT`` environment
+        variable (unless the user already set one externally).  This should be
+        called before loading any HuggingFace model.
+        """
+        import os
+        if self.hf_mirror:
+            os.environ.setdefault("HF_ENDPOINT", self.hf_mirror)
 
     def effective_weights(self) -> tuple[float, float]:
         total = self.bm25_weight + self.dense_weight
